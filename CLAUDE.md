@@ -13,22 +13,25 @@ Claude Code **orchestrates** this project. It plans, reviews, directs, and prepa
 ### Data Flow
 
 ```
-SVG file → svg_reader → PathCollection
-         → optimizer    (node simplify, merge overlaps, fix winding)
-         → splitter     (split by color/layer → CutLayers)
-         → layout       (position/scale/rotate on material sheet)
-         → cut_order    (reorder paths to minimize travel)
-         → writer       (GCODE or HPGL)
-         → hardware     (send over serial)
+file → ImporterRegistry → PathCollection
+                        → PipelineRegistry.run()
+                              optimizer   (simplify nodes, merge overlaps, fix winding)
+                              splitter    (split by color/layer → CutLayers)
+                              layout      (fit/position on material sheet)
+                              cut_order   (reorder paths to minimize travel)
+                        → PathCollection → HardwareDriver → hardware
 ```
+
+`PathCollection` is the single type that crosses every boundary: importer output, pipeline step input and output, hardware driver input. All four plugin layers — importer, pipeline, hardware, and UI — are discovered via `importlib.metadata` entry points (groups `prep.importers`, `prep.pipeline`, `prep.hardware`, `prep.ui`). Built-in implementations register the same way; third-party plugins add their own packages.
 
 ### Internal Model
 
 | Class | Purpose |
 |---|---|
-| `PathCollection` | Top-level document: material rect, layers, hardware config |
+| `PathCollection` | Top-level document: material rect + depth, layers, hardware config |
 | `CutLayer` | One color/pass: color, label, speed/power, list of paths |
-| `CutPath` | One contiguous path: Shapely geometry, closed flag |
+| `CutPath` | One contiguous path: Shapely XY geometry, closed flag, optional Z for 2.5D/3D |
+| `Dimensionality` | Enum: `D2` (z=None) / `D2_5` (z=float) / `D3` (z=ndarray); derived from `CutPath.z` |
 
 ## Project Structure
 
@@ -39,26 +42,53 @@ Prep/
 ├── pyproject.toml
 ├── prep/
 │   ├── io/
-│   │   ├── svg_reader.py
+│   │   ├── base.py              # ImporterProtocol, ImporterRegistry
+│   │   ├── importers/
+│   │   │   └── svg/
+│   │   │       ├── __init__.py
+│   │   │       ├── reader.py    # SVGImporter
+│   │   │       └── inkscape.py  # layer tree, transforms, color, visibility
 │   │   ├── gcode_writer.py
 │   │   └── hpgl_writer.py
 │   ├── core/
 │   │   ├── path_model.py
-│   │   ├── optimizer.py
-│   │   ├── splitter.py
-│   │   ├── layout.py
-│   │   └── cut_order.py
+│   │   └── configurable.py      # SettingField, Configurable protocol
+│   ├── pipeline/
+│   │   ├── base.py              # PipelineStepProtocol, PipelineRegistry
+│   │   └── steps/
+│   │       ├── optimizer.py
+│   │       ├── splitter.py
+│   │       ├── layout.py
+│   │       └── cut_order.py
 │   ├── hardware/
-│   │   ├── base.py
-│   │   ├── grbl.py
-│   │   ├── hpgl.py
-│   │   └── serial_comm.py
+│   │   ├── base.py              # HardwareDriverProtocol, HardwareRegistry
+│   │   └── serial_comm.py       # shared serial utility for driver packages
 │   └── ui/
-│       ├── main_window.py
+│       ├── forms/               # Qt Designer .ui files; loaded at runtime with uic.loadUi()
+│       │   ├── settings_dialog.ui
+│       │   ├── pipeline_panel.ui
+│       │   ├── layer_panel.ui
+│       │   ├── layout_panel.ui
+│       │   ├── hardware_panel.ui
+│       │   └── plugin_panel.ui
+│       ├── main_window.py       # workbench: dock registry, perspective bar, save/restore on close
+│       ├── pipeline_panel.py    # step list; selecting a row drives the canvas
 │       ├── canvas.py
 │       ├── layer_panel.py
 │       ├── layout_panel.py
-│       └── hardware_panel.py
+│       ├── hardware_panel.py
+│       ├── settings.py          # SettingsDialog (auto-generates from Configurable)
+│       ├── settings_store.py    # QSettings wrapper; single persistence point for all state
+│       ├── perspective.py       # Perspective dataclass, PerspectiveManager, built-in perspectives
+│       ├── plugin.py            # UIPluginProtocol, AppContext, UIPluginRegistry, AppEvent types
+│       └── plugin_panel.py      # installed plugin list with enable/disable
+├── drivers/                     # bundled drivers; move to separate repos when stable
+│   ├── prep-driver-preview/
+│   │   ├── pyproject.toml
+│   │   └── prep_driver_preview/
+│   └── prep-driver-creation-ct630/
+│       ├── pyproject.toml
+│       └── prep_driver_creation_ct630/
 └── tests/
 ```
 
@@ -75,9 +105,13 @@ Prep/
 
 ## Hardware Targets
 
-- **GRBL** laser cutters — GCODE over serial
-- **HPGL** vinyl cutters — HPGL commands over serial
-- Hardware layer is abstracted via `hardware/base.py`; new drivers added without touching the pipeline
+The hardware layer is plugin-based (`prep.hardware` entry-point group). Each machine is a separately installable package.
+
+Bundled drivers (in `drivers/`, move to separate repos once the interface stabilises):
+- **Preview** — software-only; animates the cut path on the canvas without hardware
+- **Creation CT630** — vinyl cutter; HPGL over serial at 9600 baud
+
+New machines are added without modifying the core package.
 
 ## Conventions
 
