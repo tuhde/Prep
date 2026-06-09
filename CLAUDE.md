@@ -44,10 +44,14 @@ Prep/
 │   ├── io/
 │   │   ├── base.py              # ImporterProtocol, ImporterRegistry
 │   │   ├── importers/
-│   │   │   └── svg/
+│   │   │   ├── svg/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── reader.py    # SVGImporter
+│   │   │   │   └── inkscape.py  # layer tree, transforms, color, visibility
+│   │   │   └── prep/
 │   │   │       ├── __init__.py
-│   │   │       ├── reader.py    # SVGImporter
-│   │   │       └── inkscape.py  # layer tree, transforms, color, visibility
+│   │   │       └── reader.py    # PrepProjectImporter (.prep files)
+│   │   ├── prep_writer.py       # to_prep_svg() — saves PathCollection as .prep
 │   │   ├── gcode_writer.py
 │   │   └── hpgl_writer.py
 │   ├── core/

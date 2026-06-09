@@ -63,6 +63,9 @@ class PathCollection:
     material_depth: float = 0.0   # mm; 0.0 = flat sheet (2D); > 0 = workpiece thickness
     layers: list[CutLayer] = field(default_factory=list)
     hardware: HardwareConfig = field(default_factory=lambda: HardwareConfig("", "", 0))
+    pipeline_settings: dict[str, dict[str, Any]] | None = None
+    # {step_name: {key: value}}; populated by PrepProjectImporter, None for plain SVG imports
+    # MainWindow applies these to matching pipeline steps after opening a .prep file
 ```
 
 **Dimensionality rules across the stack:**
@@ -104,7 +107,8 @@ dependencies = [
 prep = "prep.__main__:main"
 
 [project.entry-points."prep.importers"]
-svg = "prep.io.importers.svg:SVGImporter"
+svg  = "prep.io.importers.svg:SVGImporter"
+prep = "prep.io.importers.prep:PrepProjectImporter"
 
 [project.entry-points."prep.pipeline"]
 optimizer = "prep.pipeline.steps.optimizer:OptimizerStep"
@@ -217,6 +221,78 @@ Implementation:
 from .reader import SVGImporter
 __all__ = ["SVGImporter"]
 ```
+
+---
+
+### `.prep` project file format
+
+A `.prep` file is standard SVG XML with a `prep:` namespace. Any SVG tool can open it and display the paths; Prep-specific data is carried in the namespace without affecting SVG validity.
+
+```xml
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:prep="https://prep.app/ns/1.0"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     width="200mm" height="150mm"
+     prep:format-version="1"
+     prep:material-depth="0.0">
+
+  <metadata>
+    <prep:pipeline>
+      <prep:step name="optimizer" enabled="true">
+        <prep:setting key="tolerance" value="0.1"/>
+      </prep:step>
+      <prep:step name="layout" enabled="true">
+        <prep:setting key="offset_x" value="5.0"/>
+        <prep:setting key="offset_y" value="0.0"/>
+      </prep:step>
+    </prep:pipeline>
+    <prep:hardware driver="creation_ct630" port="/dev/ttyUSB0" baud="9600"/>
+  </metadata>
+
+  <!-- one <g> per CutLayer; Inkscape-compatible layer attributes -->
+  <g inkscape:groupmode="layer" inkscape:label="Red Cut"
+     prep:speed="800" prep:power="0.8" prep:force="100">
+    <path d="M 10,10 L 50,50 Z" stroke="#ff0000" fill="none"
+          prep:z="1.5"/>          <!-- 2.5D: constant Z; omit for flat 2D -->
+  </g>
+</svg>
+```
+
+Rules:
+- `width`/`height` on `<svg>` carry `material_width`/`material_height`; always in `mm` units
+- `prep:format-version` is incremented on breaking schema changes; reader raises `ValueError` for unsupported versions
+- Pipeline steps in `<prep:pipeline>` are ordered; unrecognised step names are skipped with a warning (forward compatibility)
+- `prep:z` on a `<path>` = constant float (2.5D); `prep:z-data` = comma-separated floats, one per vertex (3D); absence = flat 2D
+- A `.prep` file opened in Inkscape shows the geometry correctly; `prep:` attributes are ignored
+
+**`prep/io/prep_writer.py`** — `to_prep_svg(collection: PathCollection, steps: list[PipelineStepProtocol]) -> str`
+- Build the SVG tree with `lxml.etree`
+- Root `<svg>`: set `width`/`height` from `collection.material_width/height` with `mm` suffix; set `prep:format-version`, `prep:material-depth`
+- `<metadata>/<prep:pipeline>`: one `<prep:step>` per step; if step implements `Configurable`, add `<prep:setting>` children from `step.get_settings()`; include `enabled="true"` always (disabled steps are not in the pipeline)
+- `<prep:hardware>`: write `collection.hardware` driver/port/baud as attributes
+- Layers: one `<g inkscape:groupmode="layer">` per `CutLayer`; set `inkscape:label`, `prep:speed`, `prep:power`, `prep:force`, `stroke` from `layer.color`
+- Paths: standard `<path d="..."/>` from `CutPath.geometry`; add `prep:z="{value}"` for 2.5D, `prep:z-data="{csv}"` for 3D
+- Return UTF-8 XML string with `<?xml version="1.0" encoding="UTF-8"?>` declaration
+
+**`prep/io/importers/prep/reader.py`** — `PrepProjectImporter`
+- `name = "Prep Project"`, `extensions = frozenset({".prep"})`
+- `can_handle(path)`: suffix must be `.prep` AND lxml must find `prep:format-version` on the root element; rejects plain renamed SVG files
+- `read(path)`:
+  - Parse with lxml; check `prep:format-version` — raise `ValueError` if unsupported
+  - Extract geometry and layer structure identically to `SVGImporter` (reuse `inkscape` helpers)
+  - Override `CutLayer.speed/power/force` from `prep:speed/prep:power/prep:force` attributes on each layer `<g>`
+  - Parse `prep:z` / `prep:z-data` on each `<path>` to populate `CutPath.z`
+  - Parse `<prep:hardware>` → `HardwareConfig`
+  - Parse `<prep:pipeline>` → build `pipeline_settings: dict[str, dict[str, Any]]`
+  - Return `PathCollection` with all fields populated including `pipeline_settings`
+
+**`prep/io/importers/prep/__init__.py`**
+```python
+from .reader import PrepProjectImporter
+__all__ = ["PrepProjectImporter"]
+```
+
+---
 
 **`prep/pipeline/base.py`** — pipeline protocol and registry
 
@@ -574,7 +650,7 @@ All views are `QDockWidget` instances with unique `objectName`s (required for `s
 Plugin-contributed panels (via `ctx.add_panel()`) receive `objectName = f"view.plugin.{plugin_id}"`.
 
 **Menu bar:**
-- File → Open SVG, Recent Files, separator, Quit
+- File → New, Open… (any registered importer format), Open Recent, separator, Save (`Ctrl+S`), Save As… (saves as `.prep`), separator, Import SVG… (force-opens as SVG even if no `.prep` data), separator, Quit
 - View → one checkable action per registered dock view (show/hide)
 - Perspective → one action per registered perspective + separator + "Save Current Layout" + "New Perspective…" + "Reset to Default"
 - Plugins → Manage Plugins
@@ -595,6 +671,8 @@ Plugin-contributed panels (via `ctx.add_panel()`) receive `objectName = f"view.p
 
 `run_pipeline()` calls `pipeline._registry.run(collection)`, fires `PipelineCompletedEvent`, repopulates `PipelinePanel`, and calls `_show_step(len(_registry.trace()) - 1)` to display the final step in the canvas.
 `_show_step(index: int)` sets the canvas to display `pipeline._registry.trace()[index].collection`; called by `PipelinePanel` on row selection and by `run_pipeline()` after each run.
+`_open_file(path)` uses `ImporterRegistry.for_path(path).read(path)` to get a `PathCollection`; if `collection.pipeline_settings` is not `None`, applies each entry to the matching pipeline step via `step.set_settings(values)` before running the pipeline.
+`_save_file(path)` calls `to_prep_svg(collection, pipeline._registry.steps())` and writes the result to `path`.
 Constructs and holds the single `AppContext` instance passed to all UI plugins.
 
 **`prep/ui/canvas.py`** — `Canvas(QGraphicsView)`
