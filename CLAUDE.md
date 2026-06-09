@@ -37,7 +37,7 @@ Prep/
 ├── CLAUDE.md               # This file
 ├── AGENTS.md               # openCode implementation spec
 ├── pyproject.toml
-├── postprocess/
+├── prep/
 │   ├── io/
 │   │   ├── svg_reader.py
 │   │   ├── gcode_writer.py
@@ -84,7 +84,7 @@ Prep/
 - Python 3.11+, typed throughout (`dataclasses`, `typing`)
 - No comments unless the why is non-obvious
 - Tests live in `tests/` with SVG fixtures in `tests/fixtures/`
-- Entry point: `python -m postprocess`
+- Entry point: `python -m prep`
 
 ## GitHub
 
