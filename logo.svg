@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 300 65"
+   width="300"
+   height="65"
+   version="1.1"
+   id="svg6"
+   sodipodi:docname="logo.svg"
+   inkscape:version="1.4 (e7c3feb100, 2024-10-09)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs6" />
+  <sodipodi:namedview
+     id="namedview6"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     showguides="true"
+     inkscape:zoom="4.1653145"
+     inkscape:cx="127.84149"
+     inkscape:cy="37.572193"
+     inkscape:window-width="2287"
+     inkscape:window-height="783"
+     inkscape:window-x="3326"
+     inkscape:window-y="280"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg6">
+    <sodipodi:guide
+       position="137.88372,50.083315"
+       orientation="1,0"
+       id="guide6"
+       inkscape:locked="false" />
+    <sodipodi:guide
+       position="199.84533,40.712577"
+       orientation="1,0"
+       id="guide7"
+       inkscape:locked="false" />
+    <sodipodi:guide
+       position="89.69135,16.998872"
+       orientation="0,-1"
+       id="guide8"
+       inkscape:locked="false" />
+  </sodipodi:namedview>
+  <!-- control point handle lines -->
+  <line
+     x1="28"
+     y1="48"
+     x2="72"
+     y2="48"
+     stroke="#c8c8c8"
+     stroke-width="1"
+     id="line1" />
+  <line
+     x1="138"
+     y1="22"
+     x2="98"
+     y2="22"
+     stroke="#c8c8c8"
+     stroke-width="1"
+     id="line2" />
+  <!-- control point handle tips -->
+  <circle
+     cx="72"
+     cy="48"
+     r="2.5"
+     fill="none"
+     stroke="#c8c8c8"
+     stroke-width="1"
+     id="circle2" />
+  <circle
+     cx="98"
+     cy="22"
+     r="2.5"
+     fill="none"
+     stroke="#c8c8c8"
+     stroke-width="1"
+     id="circle3" />
+  <!-- bezier path (solid) -->
+  <path
+     d="M 28,48 C 72,48 98,22 138,22"
+     fill="none"
+     stroke="#1a1a1a"
+     stroke-width="2.5"
+     stroke-linecap="round"
+     id="path3" />
+  <!-- dashed continuation — the cut about to happen -->
+  <path
+     d="M 138,22 L 200,22"
+     fill="none"
+     stroke="#FF6B2B"
+     stroke-width="2.5"
+     stroke-dasharray="7,5"
+     stroke-linecap="round"
+     id="path4" />
+  <!-- trailing dot — path fades forward -->
+  <circle
+     cx="200"
+     cy="22"
+     r="2"
+     fill="#FF6B2B"
+     opacity="0.4"
+     id="circle4" />
+  <!-- node A — start of path -->
+  <circle
+     cx="28"
+     cy="48"
+     r="5"
+     fill="#1a1a1a"
+     id="circle5" />
+  <!-- node B — transition point, accent colour -->
+  <circle
+     cx="138"
+     cy="22"
+     r="5"
+     fill="#FF6B2B"
+     id="circle6" />
+  <!-- wordmark -->
+  <text
+     x="133.52673"
+     y="49.375511"
+     font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+     font-size="26px"
+     font-weight="300"
+     letter-spacing="3"
+     fill="#1a1a1a"
+     id="text6"
+     style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:32.8689px;font-family:'It wasn\'t me';-inkscape-font-specification:'It wasn\'t me, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;letter-spacing:3.08146;fill:#1a1a1a;stroke-width:1.02715"
+     transform="scale(1.0271536,0.97356421)">prep</text>
+</svg>
