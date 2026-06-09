@@ -41,6 +41,7 @@ Prep/
 ├── AGENTS.md               # openCode implementation spec
 ├── pyproject.toml
 ├── prep/
+│   ├── cli.py               # headless runner: prep run / prep send / prep ui
 │   ├── io/
 │   │   ├── base.py              # ImporterProtocol, ImporterRegistry
 │   │   ├── importers/

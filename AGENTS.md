@@ -121,7 +121,24 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 ```
 
-Create `prep/__main__.py` with a `main()` that launches the Qt app.
+Create `prep/__main__.py`:
+
+```python
+def main() -> None:
+    import sys
+    args = sys.argv[1:]
+    if args and args[0] not in ("ui",):
+        from prep.cli import run_cli
+        run_cli(args)
+    else:
+        from prep.ui.main_window import MainWindow
+        # launch Qt app
+
+if __name__ == "__main__":
+    main()
+```
+
+`ui` as an explicit subcommand also launches Qt; any other subcommand routes to the CLI. Qt is never imported on the CLI path.
 
 Create all `__init__.py` files for the package structure.
 
@@ -694,6 +711,48 @@ Constructs and holds the single `AppContext` instance passed to all UI plugins.
 - `driver_combo` populated at runtime from `hardware._registry.drivers()`
 - `settings_btn` enabled only when selected driver implements `Configurable`; opens `SettingsDialog(driver)`
 - `send_btn` disabled until connected; `progress_bar` driven via `progress_cb`
+
+### Phase 5 — CLI
+
+**`prep/cli.py`** — `run_cli(argv: list[str]) -> None`
+
+Uses `argparse` (stdlib). Three subcommands; Qt is never imported.
+
+```
+prep run  INPUT [--output FILE] [--set STEP.KEY=VALUE ...] [--driver ID] [--port PORT] [--baud INT]
+prep send INPUT                 [--set STEP.KEY=VALUE ...] [--driver ID] [--port PORT] [--baud INT]
+prep ui                         (explicit alias for launching the GUI)
+```
+
+`INPUT` is any file accepted by `ImporterRegistry` (`.prep`, `.svg`, or any registered format).
+
+**Shared startup for `run` and `send`:**
+1. Call `load_plugins()` on all four registries (importers, pipeline, hardware, UI plugins skipped — no Qt)
+2. `collection = io._registry.for_path(input_path).read(input_path)`
+3. If `collection.pipeline_settings` is not `None`, apply each entry to the matching step via `step.set_settings(values)`
+4. For each `--set STEP.KEY=VALUE`: parse `STEP` and `KEY`, coerce `VALUE` (try `float` → `int` → `bool` → `str`), call `step.set_settings({KEY: coerced})`
+5. If `--driver` given, override `collection.hardware.driver`; if `--port`, override `collection.hardware.port`; if `--baud`, override `collection.hardware.baud`
+6. `collection = pipeline._registry.run(collection)`
+
+**`run` command** — write output after pipeline:
+- Output format inferred from `--output` extension:
+  - `.gcode` → `io.gcode_writer.to_gcode(collection)` → write to file
+  - `.hpgl`  → `io.hpgl_writer.to_hpgl(collection)` → write to file
+  - `.prep` / `.svg` → `io.prep_writer.to_prep_svg(collection, pipeline._registry.steps())` → write to file
+- If `--output` is omitted, print GCODE to stdout
+- Exit 0 on success; print error to stderr and exit 1 on failure
+
+**`send` command** — connect and stream after pipeline:
+- `driver = hardware._registry.by_id(collection.hardware.driver)`
+- `driver.connect(collection.hardware.port, collection.hardware.baud)`
+- `driver.send(collection, progress_cb=_print_progress)`
+- `driver.disconnect()`
+- `_print_progress(fraction)` writes a simple `\r` progress line to stderr: `Sending… 42%`
+
+**Error handling:**
+- Unknown importer format → `ValueError` caught, message + exit 1
+- Missing `--driver` with no hardware config in file → clear message + exit 1
+- Serial connection failure → message + exit 1
 
 ## Tests
 
