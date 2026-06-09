@@ -754,6 +754,241 @@ prep ui                         (explicit alias for launching the GUI)
 - Missing `--driver` with no hardware config in file → clear message + exit 1
 - Serial connection failure → message + exit 1
 
+## Phase 1 Bug Fixes
+
+The Phase 1 scaffold contains the following confirmed defects. Fix all of them before any other work.
+
+---
+
+### Fix 1 — `prep/io/prep_writer.py`: `UnboundLocalError` on `INKSCAPE_NS`
+
+Inside `to_prep_svg()` there is a bare assignment `INKSCAPE_NS = "..."` before the `return` statement. Python marks the name local for the entire function scope, so the earlier use at `g.set(f"{{{INKSCAPE_NS}}}label", ...)` (inside the layers loop, before that assignment) raises `UnboundLocalError` on every call.
+
+**Fix:**
+- Delete the `INKSCAPE_NS = ...` line **inside** `to_prep_svg()`.
+- Move `INKSCAPE_NS` and `INKSCAPE_PREFIX` to the **top of the file**, alongside `PREP_NS` and `PREP_PREFIX`, before the function definition. Remove the redundant module-level definitions currently at the bottom of the file.
+
+---
+
+### Fix 2 — `prep/io/prep_writer.py`: Wrong namespace for `groupmode`, missing `viewBox`
+
+Two problems in `to_prep_svg()`:
+
+1. `g.set(f"{{{PREP_NS}}}groupmode", "layer")` uses the PREP namespace. The spec and `PrepProjectImporter` expect `inkscape:groupmode`:
+   ```python
+   g.set(f"{{{INKSCAPE_NS}}}groupmode", "layer")
+   ```
+
+2. No `viewBox` is written on the SVG root, so coordinate round-trips cannot be lossless. Add it immediately after the `width`/`height` attributes:
+   ```python
+   root.set("viewBox", f"0 0 {collection.material_width} {collection.material_height}")
+   ```
+
+---
+
+### Fix 3 — `prep/io/prep_writer.py`: D3 z-data (`np.ndarray`) silently dropped
+
+Only `isinstance(path.z, float)` is handled; ndarray z is silently ignored. Per the spec, 3D paths must serialize their per-vertex Z as `prep:z-data` (comma-separated).
+
+**Fix:** Add `import numpy as np` at the top of the file, and extend the z-serialization branch:
+```python
+if path.z is not None:
+    if isinstance(path.z, float):
+        path_el.set(f"{PREP_PREFIX}z", str(path.z))
+    elif isinstance(path.z, np.ndarray):
+        path_el.set(f"{PREP_PREFIX}z-data", ",".join(str(v) for v in path.z))
+```
+
+---
+
+### Fix 4 — `prep/io/importers/svg/reader.py`: svgpathtools API misuse + wrong coordinate scale
+
+Two bugs in `_element_to_shapely()`:
+
+**Bug A — wrong iteration:** `path.continuous_subpaths()` returns `Path` objects. Iterating a `Path` yields **segment objects** (`Line`, `CubicBezier`, `Arc`, …), not complex point values. Accessing `.real`/`.imag` on a segment raises `AttributeError`.
+
+**Bug B — wrong coordinate conversion:** SVG path data is in user units. The current code divides by `svg_width` (mm), which gives a dimensionless fraction, not mm. The correct conversion multiplies by `mm_per_user_unit`.
+
+**Fix — update `_element_to_shapely` signature and body:**
+
+```python
+def _element_to_shapely(
+    el: etree._Element,
+    scale_x: float,
+    scale_y: float,
+) -> list[tuple[LineString | LinearRing, bool]]:
+    results = []
+    d = el.get("d")
+    if not d:
+        return results
+    path = parse_svg_path(d)
+    for subpath in path.continuous_subpaths():
+        if len(subpath) == 0:
+            continue
+        pts = [subpath[0].start] + [seg.end for seg in subpath]
+        coords = [(p.real * scale_x, p.imag * scale_y) for p in pts]
+        if len(coords) < 2:
+            continue
+        closed = subpath.isclosed()
+        geom = LinearRing(coords) if closed else LineString(coords)
+        results.append((geom, closed))
+    return results
+```
+
+**Fix — compute `scale_x`/`scale_y` in `SVGImporter.read()`:**
+
+Replace the current viewBox block with:
+
+```python
+svg_width = unit_to_mm(tree.get("width", "100"))
+svg_height = unit_to_mm(tree.get("height", "100"))
+
+viewbox = tree.get("viewBox", "").split()
+if len(viewbox) == 4:
+    _vb_x0, _vb_y0, vb_w, vb_h = (float(v) for v in viewbox)
+    if vb_w and vb_h:
+        svg_width = unit_to_mm(tree.get("width", str(vb_w)))
+        svg_height = unit_to_mm(tree.get("height", str(vb_h)))
+        scale_x = svg_width / vb_w
+        scale_y = svg_height / vb_h
+    else:
+        scale_x = scale_y = 1.0
+else:
+    # No viewBox: user units are CSS px at 96 dpi
+    scale_x = 25.4 / 96.0
+    scale_y = 25.4 / 96.0
+```
+
+Pass `scale_x, scale_y` to `_element_to_shapely` at every call site.
+
+**Fix — `PrepProjectImporter.walk()`:** `.prep` files written by `to_prep_svg()` use `viewBox="0 0 {w} {h}"` (added in Fix 2), so 1 user unit = 1 mm → `scale_x = scale_y = 1.0`. Replace the inline path-conversion code in `walk()` with a call to `_element_to_shapely(el, 1.0, 1.0)` (it is already imported at the top of `prep/reader.py` but unused). Also parse `prep:z-data` (comma-separated ndarray) in addition to `prep:z` (scalar float):
+```python
+z_data_str = el.get(f"{PREP_PREFIX}z-data")
+z_str = el.get(f"{PREP_PREFIX}z")
+if z_data_str:
+    import numpy as np
+    z: float | np.ndarray | None = np.array([float(v) for v in z_data_str.split(",")])
+elif z_str:
+    z = float(z_str)
+else:
+    z = None
+```
+
+---
+
+### Fix 5 — `prep/io/importers/svg/reader.py`: `_rgb_to_hex` strips `%` before checking for it
+
+The function does `rgb[4:-1].replace("%", "").split(",")` — after stripping, `"%" not in vals[i]` is always `True`, so the percentage-scaling branch is dead code. Percentage colors like `rgb(50%,100%,25%)` are mis-parsed as raw integers.
+
+**Fix:** Check for `%` per-token before stripping:
+```python
+def _rgb_to_hex(rgb: str) -> str:
+    rgb = rgb.strip()
+    if rgb.startswith("rgb(") and rgb.endswith(")"):
+        vals = rgb[4:-1].split(",")
+        if len(vals) == 3:
+            def _component(s: str) -> int:
+                s = s.strip()
+                if s.endswith("%"):
+                    return round(float(s[:-1]) * 255 / 100)
+                return int(float(s))
+            r, g, b = _component(vals[0]), _component(vals[1]), _component(vals[2])
+            return f"#{r:02x}{g:02x}{b:02x}"
+    return "#000000"
+```
+
+---
+
+### Fix 6 — `prep/io/importers/svg/reader.py`: Named CSS colors produce invalid hex strings
+
+`resolve_color()` falls back to `return f"#{stroke}"` for colors that are not hex and not `rgb()`. This produces invalid strings like `"#red"` or `"#black"`.
+
+**Fix:** Return `None` instead:
+```python
+if stroke.startswith("rgb"):
+    return _rgb_to_hex(stroke)
+return None   # named colors fall back to default layer color at the call site
+```
+
+---
+
+### Fix 7 — `prep/io/importers/svg/reader.py`: `walk()` recurses into `<defs>`, `<clipPath>`, etc.
+
+Paths inside structural/non-rendering elements (`defs`, `clipPath`, `mask`, `symbol`) must not be treated as cut paths.
+
+**Fix:** Skip these tags before recursing:
+```python
+def walk(els: list[etree._Element]) -> None:
+    for el in els:
+        tag_local = etree.QName(el.tag).localname
+        if tag_local in ("defs", "clipPath", "mask", "symbol"):
+            continue
+        if tag_local in ("path", "rect", "circle", "ellipse", "line", "polyline", "polygon"):
+            process_element(el)
+        walk(list(el))
+```
+
+Apply the same guard at the top of the `else` branch in `PrepProjectImporter.walk()`.
+
+---
+
+### Fix 8 — `prep/io/importers/prep/reader.py`: Wrong namespace for Inkscape layer detection
+
+```python
+el.tag == f"{{{INKSCAPE_NS}}}g"   # wrong: <g> is in the SVG namespace
+```
+
+Inkscape layers are `<svg:g inkscape:groupmode="layer">`. The `g` tag is in the SVG namespace (`http://www.w3.org/2000/svg`), not the Inkscape namespace.
+
+**Fix:** Add `SVG_NS = "http://www.w3.org/2000/svg"` at the top of `prep/io/importers/prep/reader.py` and fix the check:
+```python
+SVG_NS = "http://www.w3.org/2000/svg"
+...
+is_layer_group = (
+    el.tag == f"{{{SVG_NS}}}g"
+    and el.get(f"{{{INKSCAPE_NS}}}groupmode") == "layer"
+)
+```
+
+---
+
+### Fix 9 — `prep/io/importers/prep/__init__.py`: Empty file breaks entry-point loading
+
+The `pyproject.toml` entry point `prep = "prep.io.importers.prep:PrepProjectImporter"` requires the class to be importable from the package `__init__`. The file is empty, so `ep.load()` raises `AttributeError`.
+
+**Fix:** Mirror the SVG package:
+```python
+from .reader import PrepProjectImporter
+
+__all__ = ["PrepProjectImporter"]
+```
+
+---
+
+### Fix 10 — `prep/pipeline/steps/layout.py`: `min_x`/`min_y` not used in transform
+
+`min_x` and `min_y` are computed but never applied. The geometry is scaled without first being normalized to the origin, so any non-origin geometry is displaced by `min_x * scale` beyond the intended offset.
+
+**Fix:** Subtract `min_x`/`min_y` before scaling:
+```python
+new_coords = [
+    ((c[0] - min_x) * scale + self.offset_x, (c[1] - min_y) * scale + self.offset_y)
+    for c in scaled.coords
+]
+```
+
+---
+
+### Fix 11 — `prep/core/configurable.py`: Duplicate `PipelineStepProtocol`
+
+`PipelineStepProtocol` is defined identically in both `prep/core/configurable.py` and `prep/pipeline/base.py`. The canonical location per the architecture is `prep/pipeline/base.py`.
+
+**Fix:**
+- Remove `PipelineStepProtocol` from `prep/core/configurable.py`.
+- Update `prep/io/prep_writer.py` to import it from `prep.pipeline.base` instead of `prep.core.configurable`.
+
+---
+
 ## Tests
 
 Write unit tests in `tests/` using `pytest`. Include SVG fixture files in `tests/fixtures/`:
