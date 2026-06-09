@@ -1,0 +1,29 @@
+[project]
+name = "prep"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6",
+    "svgpathtools",
+    "lxml",
+    "shapely",
+    "pyserial",
+    "numpy",
+]
+
+[project.scripts]
+prep = "prep.__main__:main"
+
+[project.entry-points."prep.importers"]
+svg  = "prep.io.importers.svg:SVGImporter"
+prep = "prep.io.importers.prep:PrepProjectImporter"
+
+[project.entry-points."prep.pipeline"]
+optimizer = "prep.pipeline.steps.optimizer:OptimizerStep"
+splitter  = "prep.pipeline.steps.splitter:SplitterStep"
+layout    = "prep.pipeline.steps.layout:LayoutStep"
+cut_order = "prep.pipeline.steps.cut_order:CutOrderStep"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
