@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from lxml import etree
-from svgpathtools import parse as parse_svg_path
+from svgpathtools import parse_path
 
 from prep.core.path_model import CutLayer, CutPath, HardwareConfig, PathCollection
 from shapely.geometry import LineString, LinearRing
@@ -39,17 +39,20 @@ def resolve_color(el: etree._Element) -> str | None:
         return stroke
     if stroke.startswith("rgb"):
         return _rgb_to_hex(stroke)
-    return f"#{stroke}"
+    return None
 
 
 def _rgb_to_hex(rgb: str) -> str:
     rgb = rgb.strip()
     if rgb.startswith("rgb(") and rgb.endswith(")"):
-        vals = rgb[4:-1].replace("%", "").split(",")
+        vals = rgb[4:-1].split(",")
         if len(vals) == 3:
-            r = int(vals[0]) if "%" not in vals[0] else int(float(vals[0]) * 255 / 100)
-            g = int(vals[1]) if "%" not in vals[1] else int(float(vals[1]) * 255 / 100)
-            b = int(vals[2]) if "%" not in vals[2] else int(float(vals[2]) * 255 / 100)
+            def _component(s: str) -> int:
+                s = s.strip()
+                if s.endswith("%"):
+                    return round(float(s[:-1]) * 255 / 100)
+                return int(float(s))
+            r, g, b = _component(vals[0]), _component(vals[1]), _component(vals[2])
             return f"#{r:02x}{g:02x}{b:02x}"
     return "#000000"
 
@@ -62,21 +65,26 @@ def _is_visible(el: etree._Element) -> bool:
     return True
 
 
-def _element_to_shapely(el: etree._Element, svg_width: float, svg_height: float) -> list[tuple[LineString | LinearRing, bool]]:
+def _element_to_shapely(
+    el: etree._Element,
+    scale_x: float,
+    scale_y: float,
+) -> list[tuple[LineString | LinearRing, bool]]:
     results = []
     d = el.get("d")
-    if d:
-        path = parse_svg_path(d)
-        for subpath in path.continuous_subpaths():
-            coords = [(p.real / svg_width, p.imag / svg_height) for p in subpath]
-            if len(coords) < 2:
-                continue
-            closed = subpath.isclosed()
-            if closed:
-                geom = LinearRing(coords)
-            else:
-                geom = LineString(coords)
-            results.append((geom, closed))
+    if not d:
+        return results
+    path = parse_path(d)
+    for subpath in path.continuous_subpaths():
+        if len(subpath) == 0:
+            continue
+        pts = [subpath[0].start] + [seg.end for seg in subpath]
+        coords = [(p.real * scale_x, p.imag * scale_y) for p in pts]
+        if len(coords) < 2:
+            continue
+        closed = subpath.isclosed()
+        geom = LinearRing(coords) if closed else LineString(coords)
+        results.append((geom, closed))
     return results
 
 
@@ -100,10 +108,17 @@ class SVGImporter:
 
         viewbox = tree.get("viewBox", "").split()
         if len(viewbox) == 4:
-            vb_w, vb_h = float(viewbox[2]), float(viewbox[3])
+            _vb_x0, _vb_y0, vb_w, vb_h = (float(v) for v in viewbox)
             if vb_w and vb_h:
                 svg_width = unit_to_mm(tree.get("width", str(vb_w)))
                 svg_height = unit_to_mm(tree.get("height", str(vb_h)))
+                scale_x = svg_width / vb_w
+                scale_y = svg_height / vb_h
+            else:
+                scale_x = scale_y = 1.0
+        else:
+            scale_x = 25.4 / 96.0
+            scale_y = 25.4 / 96.0
 
         layers_map: dict[str, CutLayer] = {}
         default_layer = CutLayer(color="#000000", label="Default", speed=800.0, power=0.8, force=100)
@@ -115,13 +130,15 @@ class SVGImporter:
             color = resolve_color(el) or "#000000"
             if color not in layers_map:
                 layers_map[color] = CutLayer(color=color, label=f"Layer {len(layers_map) + 1}", speed=800.0, power=0.8, force=100)
-            for geom, closed in _element_to_shapely(el, svg_width, svg_height):
+            for geom, closed in _element_to_shapely(el, scale_x, scale_y):
                 cp = CutPath(geometry=geom, closed=closed)
                 layers_map[color].paths.append(cp)
 
         def walk(els: list[etree._Element]) -> None:
             for el in els:
                 tag_local = etree.QName(el.tag).localname
+                if tag_local in ("defs", "clipPath", "mask", "symbol"):
+                    continue
                 if tag_local in ("path", "rect", "circle", "ellipse", "line", "polyline", "polygon"):
                     process_element(el)
                 walk(list(el))

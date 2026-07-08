@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from prep.core.path_model import PathCollection
-
 
 @dataclass
 class SettingField:
@@ -20,10 +18,3 @@ class Configurable(Protocol):
     def settings_schema(self) -> list[SettingField]: ...
     def get_settings(self) -> dict[str, Any]: ...
     def set_settings(self, values: dict[str, Any]) -> None: ...
-
-
-class PipelineStepProtocol(Protocol):
-    name: str
-    order: int
-
-    def process(self, collection: PathCollection) -> PathCollection: ...

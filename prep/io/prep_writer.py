@@ -1,11 +1,14 @@
+import numpy as np
 from lxml import etree
 
-from prep.core.path_model import CutLayer, CutPath, HardwareConfig, PathCollection
-from prep.core.configurable import PipelineStepProtocol
+from prep.core.path_model import PathCollection
+from prep.pipeline.base import PipelineStepProtocol
 
 
 PREP_NS = "https://prep.app/ns/1.0"
 PREP_PREFIX = f"{{{PREP_NS}}}"
+INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
+INKSCAPE_PREFIX = f"{{{INKSCAPE_NS}}}"
 
 
 def _coords_from_geometry(geom) -> list[tuple[float, float]]:
@@ -14,13 +17,18 @@ def _coords_from_geometry(geom) -> list[tuple[float, float]]:
     return []
 
 
+SVG_NS = "http://www.w3.org/2000/svg"
+SVG_PREFIX = f"{{{SVG_NS}}}"
+
+
 def to_prep_svg(collection: PathCollection, steps: list[PipelineStepProtocol]) -> str:
     root = etree.Element(
-        "svg",
-        nsmap={"svg": "http://www.w3.org/2000/svg", "prep": PREP_NS, "inkscape": "http://www.inkscape.org/namespaces/inkscape"},
+        f"{SVG_PREFIX}svg",
+        nsmap={None: SVG_NS, "prep": PREP_NS, "inkscape": INKSCAPE_NS},
     )
     root.set("width", f"{collection.material_width}mm")
     root.set("height", f"{collection.material_height}mm")
+    root.set("viewBox", f"0 0 {collection.material_width} {collection.material_height}")
     root.set(f"{PREP_PREFIX}format-version", "1")
     root.set(f"{PREP_PREFIX}material-depth", str(collection.material_depth))
 
@@ -45,8 +53,8 @@ def to_prep_svg(collection: PathCollection, steps: list[PipelineStepProtocol]) -
     hw_el.set("baud", str(collection.hardware.baud))
 
     for layer in collection.layers:
-        g = etree.SubElement(root, "g")
-        g.set(f"{{{PREP_NS}}}groupmode", "layer")
+        g = etree.SubElement(root, f"{SVG_PREFIX}g")
+        g.set(f"{{{INKSCAPE_NS}}}groupmode", "layer")
         g.set(f"{{{INKSCAPE_NS}}}label", layer.label)
         g.set(f"{PREP_PREFIX}speed", str(layer.speed))
         g.set(f"{PREP_PREFIX}power", str(layer.power))
@@ -55,17 +63,14 @@ def to_prep_svg(collection: PathCollection, steps: list[PipelineStepProtocol]) -
         g.set("fill", "none")
 
         for path in layer.paths:
-            path_el = etree.SubElement(g, "path")
+            path_el = etree.SubElement(g, f"{SVG_PREFIX}path")
             coords = _coords_from_geometry(path.geometry)
             d = "M " + " L ".join(f"{x},{y}" for x, y in coords) + " Z" if path.closed else "M " + " L ".join(f"{x},{y}" for x, y in coords)
             path_el.set("d", d)
             if path.z is not None:
                 if isinstance(path.z, float):
                     path_el.set(f"{PREP_PREFIX}z", str(path.z))
+                elif isinstance(path.z, np.ndarray):
+                    path_el.set(f"{PREP_PREFIX}z-data", ",".join(str(v) for v in path.z))
 
-    INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=True).decode("UTF-8")
-
-
-INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
-INKSCAPE_PREFIX = f"{{{INKSCAPE_NS}}}"

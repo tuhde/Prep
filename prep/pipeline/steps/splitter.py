@@ -7,7 +7,6 @@ class SplitterStep:
 
     def process(self, collection: PathCollection) -> PathCollection:
         from copy import deepcopy
-        from prep.core.path_model import CutLayer
 
         result = deepcopy(collection)
         color_to_layer: dict = {}

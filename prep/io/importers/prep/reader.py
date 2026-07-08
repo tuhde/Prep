@@ -3,12 +3,13 @@ from pathlib import Path
 from lxml import etree
 
 from prep.core.path_model import CutLayer, CutPath, HardwareConfig, PathCollection
-from prep.io.importers.svg.reader import SVGImporter, _is_visible, resolve_color, unit_to_mm, _element_to_shapely
+from prep.io.importers.svg.reader import _is_visible, resolve_color, unit_to_mm, _element_to_shapely
 
 PREP_NS = "https://prep.app/ns/1.0"
 PREP_PREFIX = f"{{{PREP_NS}}}"
 INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
 INKSCAPE_PREFIX = f"{{{INKSCAPE_NS}}}"
+SVG_NS = "http://www.w3.org/2000/svg"
 
 
 class PrepProjectImporter:
@@ -82,8 +83,10 @@ class PrepProjectImporter:
         def walk(els: list[etree._Element], parent_layer: CutLayer | None = None) -> None:
             for el in els:
                 tag_local = etree.QName(el.tag).localname
+                if tag_local in ("defs", "clipPath", "mask", "symbol"):
+                    continue
                 is_layer_group = (
-                    el.tag == f"{{{INKSCAPE_NS}}}g"
+                    el.tag == f"{{{SVG_NS}}}g"
                     and el.get(f"{{{INKSCAPE_NS}}}groupmode") == "layer"
                 )
                 if is_layer_group:
@@ -108,23 +111,18 @@ class PrepProjectImporter:
                 else:
                     if _is_visible(el) and tag_local in ("path", "rect", "circle", "ellipse", "line", "polyline", "polygon"):
                         target = parent_layer if parent_layer is not None else default_layer
-                        d = el.get("d", "")
-                        from svgpathtools import parse as parse_svg_path
-                        from shapely.geometry import LineString, LinearRing
-                        if d:
-                            svg_path = parse_svg_path(d)
-                            for subpath in svg_path.continuous_subpaths():
-                                coords = [(p.real / svg_width, p.imag / svg_height) for p in subpath]
-                                if len(coords) < 2:
-                                    continue
-                                closed = subpath.isclosed()
-                                geom = LinearRing(coords) if closed else LineString(coords)
-                                z: float | None = None
-                                z_str = el.get(f"{PREP_PREFIX}z")
-                                if z_str:
-                                    z = float(z_str)
-                                cp = CutPath(geometry=geom, closed=closed, z=z)
-                                target.paths.append(cp)
+                        for geom, closed in _element_to_shapely(el, 1.0, 1.0):
+                            import numpy as np
+                            z_data_str = el.get(f"{PREP_PREFIX}z-data")
+                            z_str = el.get(f"{PREP_PREFIX}z")
+                            if z_data_str:
+                                z: float | np.ndarray | None = np.array([float(v) for v in z_data_str.split(",")])
+                            elif z_str:
+                                z = float(z_str)
+                            else:
+                                z = None
+                            cp = CutPath(geometry=geom, closed=closed, z=z)
+                            target.paths.append(cp)
 
         walk(list(tree))
 

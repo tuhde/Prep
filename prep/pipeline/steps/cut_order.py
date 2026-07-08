@@ -8,7 +8,6 @@ class CutOrderStep:
 
     def process(self, collection: PathCollection) -> PathCollection:
         from copy import deepcopy
-        from prep.core.path_model import CutPath
 
         result = deepcopy(collection)
 

@@ -25,7 +25,6 @@ class LayoutStep:
 
     def process(self, collection: PathCollection) -> PathCollection:
         from copy import deepcopy
-        from shapely.affinity import translate
 
         result = deepcopy(collection)
 
@@ -59,7 +58,7 @@ class LayoutStep:
             for path in layer.paths:
                 scaled = path.geometry
                 if hasattr(scaled, "coords"):
-                    new_coords = [(c[0] * scale + self.offset_x, c[1] * scale + self.offset_y) for c in scaled.coords]
+                    new_coords = [((c[0] - min_x) * scale + self.offset_x, (c[1] - min_y) * scale + self.offset_y) for c in scaled.coords]
                     from shapely.geometry import LineString, LinearRing
                     if isinstance(scaled, LinearRing):
                         scaled = LinearRing(new_coords)

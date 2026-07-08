@@ -1,4 +1,4 @@
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import Protocol
 
@@ -14,7 +14,7 @@ class ImporterProtocol(Protocol):
 
 
 class ImporterRegistry:
-    _descriptors: dict[str, entry_points.EntryPoint]
+    _descriptors: dict[str, EntryPoint]
     _loaded: dict[str, ImporterProtocol]
 
     def __init__(self) -> None:

@@ -1,6 +1,5 @@
 from prep.core.configurable import SettingField
 from prep.core.path_model import PathCollection
-from prep.core.configurable import Configurable
 
 
 class OptimizerStep:
