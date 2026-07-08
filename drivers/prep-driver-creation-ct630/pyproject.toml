@@ -1,0 +1,12 @@
+[project]
+name = "prep-driver-creation-ct630"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["prep", "pyserial"]
+
+[project.entry-points."prep.hardware"]
+creation_ct630 = "prep_driver_creation_ct630:CT630Driver"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
