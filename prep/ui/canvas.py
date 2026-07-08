@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPen, QColor, QWheelEvent, QMouseEvent
+from PySide6.QtGui import QPen, QColor, QWheelEvent, QMouseEvent, QPainter
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsPathItem
 
 from prep.core.path_model import PathCollection
@@ -10,7 +10,7 @@ class Canvas(QGraphicsView):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
-        self.setRenderHint(self.renderHints() | self.renderHint(self.Antialiasing))
+        self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.NoDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)

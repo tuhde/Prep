@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from importlib.metadata import entry_points
 from typing import Protocol
 
 from prep.core.path_model import PathCollection
@@ -31,7 +32,19 @@ class PipelineRegistry:
     def register(self, step: PipelineStepProtocol) -> None:
         self._loaded[step.name] = step
 
+    def load_plugins(self) -> None:
+        try:
+            eps = entry_points(group="prep.pipeline")
+        except TypeError:
+            eps = entry_points().get("prep.pipeline", [])
+        for ep in eps:
+            self._descriptors[ep.name] = ep
+
     def steps(self) -> list[PipelineStepProtocol]:
+        for name, ep in self._descriptors.items():
+            if name not in self._loaded:
+                step_cls = ep.load()
+                self._loaded[name] = step_cls()
         return sorted(self._loaded.values(), key=lambda s: s.order)
 
     def run(self, collection: PathCollection) -> PathCollection:

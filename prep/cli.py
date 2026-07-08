@@ -9,7 +9,7 @@ def run_cli(argv: list[str]) -> None:
 
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("input", type=str)
-    run_parser.add_argument("--output", type=str)
+    run_parser.add_argument("-o", "--output", type=str)
     run_parser.add_argument("--set", action="append", default=[])
     run_parser.add_argument("--driver", type=str)
     run_parser.add_argument("--port", type=str)
