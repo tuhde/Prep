@@ -3,7 +3,8 @@ from pathlib import Path
 from lxml import etree
 
 from prep.core.path_model import CutLayer, CutPath, HardwareConfig, PathCollection
-from prep.io.importers.svg.reader import _is_visible, resolve_color, unit_to_mm, _element_to_shapely
+from prep.io.importers.svg import inkscape
+from prep.io.importers.svg.reader import _element_to_shapely
 
 PREP_NS = "https://prep.app/ns/1.0"
 PREP_PREFIX = f"{{{PREP_NS}}}"
@@ -35,8 +36,8 @@ class PrepProjectImporter:
             if version > 1:
                 raise ValueError(f"Unsupported .prep format version: {version}")
 
-        svg_width = unit_to_mm(tree.get("width", "100"))
-        svg_height = unit_to_mm(tree.get("height", "100"))
+        svg_width = inkscape.unit_to_mm(tree.get("width", "100"))
+        svg_height = inkscape.unit_to_mm(tree.get("height", "100"))
 
         material_depth = 0.0
         depth_str = tree.get(f"{PREP_PREFIX}material-depth")
@@ -80,8 +81,12 @@ class PrepProjectImporter:
         default_layer = CutLayer(color="#000000", label="Default", speed=800.0, power=0.8, force=100)
         layers_map["#000000"] = default_layer
 
+        shape_tags = {"path", "rect", "circle", "ellipse", "line", "polyline", "polygon"}
+
         def walk(els: list[etree._Element], parent_layer: CutLayer | None = None) -> None:
             for el in els:
+                if not isinstance(el.tag, str):
+                    continue
                 tag_local = etree.QName(el.tag).localname
                 if tag_local in ("defs", "clipPath", "mask", "symbol"):
                     continue
@@ -98,7 +103,7 @@ class PrepProjectImporter:
                     speed_str = el.get(f"{PREP_PREFIX}speed")
                     power_str = el.get(f"{PREP_PREFIX}power")
                     force_str = el.get(f"{PREP_PREFIX}force")
-                    color = resolve_color(el) or "#000000"
+                    color = inkscape.resolve_color(el) or "#000000"
                     layer = CutLayer(
                         color=color,
                         label=label,
@@ -109,7 +114,7 @@ class PrepProjectImporter:
                     layers_map[color] = layer
                     walk(list(el), layer)
                 else:
-                    if _is_visible(el) and tag_local in ("path", "rect", "circle", "ellipse", "line", "polyline", "polygon"):
+                    if inkscape.is_visible(el) and tag_local in shape_tags:
                         target = parent_layer if parent_layer is not None else default_layer
                         for geom, closed in _element_to_shapely(el, 1.0, 1.0):
                             import numpy as np

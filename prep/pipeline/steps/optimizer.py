@@ -1,5 +1,10 @@
+from copy import deepcopy
+
+import shapely
+from shapely.geometry import LinearRing
+
 from prep.core.configurable import SettingField
-from prep.core.path_model import PathCollection
+from prep.core.path_model import CutPath, PathCollection
 
 
 class OptimizerStep:
@@ -18,15 +23,18 @@ class OptimizerStep:
             self.tolerance = float(values["tolerance"])
 
     def process(self, collection: PathCollection) -> PathCollection:
-        from copy import deepcopy
-        import shapely
-
         result = deepcopy(collection)
         for layer in result.layers:
             simplified_paths = []
+            seen: set[str] = set()
             for path in layer.paths:
                 simplified = shapely.simplify(path.geometry, self.tolerance, preserve_topology=True)
-                from prep.core.path_model import CutPath
+                if isinstance(simplified, LinearRing) and not simplified.is_ccw:
+                    simplified = LinearRing(list(simplified.coords)[::-1])
+                wkt = simplified.wkt
+                if wkt in seen:
+                    continue
+                seen.add(wkt)
                 simplified_paths.append(CutPath(geometry=simplified, closed=path.closed, z=path.z))
             layer.paths = simplified_paths
         return result
