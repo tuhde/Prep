@@ -989,6 +989,230 @@ new_coords = [
 
 ---
 
+## Post-Phase-5 Bug Fixes
+
+Phases 1–5 are complete and all 63 existing tests pass, but end-to-end verification (running the actual CLI output and driving the real GUI under Xvfb, not just the test suite) surfaced the following confirmed defects. Fix all of them before any other work. The existing tests did not catch these — after fixing, add regression tests that would have caught each one.
+
+---
+
+### Fix 12 — `prep/io/importers/svg/reader.py`: curved segments collapse to degenerate lines
+
+`_element_to_shapely()` builds each path's point list as:
+
+```python
+pts = [subpath[0].start] + [seg.end for seg in subpath]
+```
+
+This only ever samples a segment's `start`/`end` complex value. For a straight `Line` segment that's the whole geometry, but for `Arc`, `CubicBezier`, and `QuadraticBezier` segments it discards all curvature — the segment becomes a straight chord between its two endpoints. This is not a hypothetical: `_shape_to_d()` turns every `<circle>` and `<ellipse>` into two 180°-sweep `Arc` commands whose `start` and `end` are the same two points (opposite ends of the shape), and two arcs sharing the same pair of endpoints tessellate to the same two points twice. Confirmed by running `prep run tests/fixtures/two_colors.svg`: the circle (`cx=40 cy=80 r=20`) and ellipse (`cx=125 cy=100 rx=30 ry=20`) both come out as a degenerate back-and-forth line (e.g. G-code `G1 X12.500 Y87.500 / G1 X62.500 Y87.500 / G1 X12.500 Y87.500`) instead of a round shape. The same loss applies to rounded-rect corners (`_shape_to_d` also emits `Arc` for `rx`/`ry` on `<rect>`) and to any hand-authored `<path>` using `C`/`Q`/`A` commands.
+
+**Fix:** tessellate every non-`Line` segment into multiple points instead of just its endpoint. Sample in the segment's own parametric space with `seg.point(t)`, before scale/transform is applied — the existing per-point `x_user, y_user, transform @ [...]` handling stays the same, it just now runs over more points per segment.
+
+```python
+import numpy as np
+from svgpathtools import Line
+
+_CURVE_SAMPLES = 32  # points per curved segment, excluding the shared start point
+
+def _segment_points(seg):
+    if isinstance(seg, Line):
+        return [seg.end]
+    return [seg.point(t) for t in np.linspace(0.0, 1.0, _CURVE_SAMPLES)[1:]]
+
+def _element_to_shapely(
+    el: etree._Element,
+    scale_x: float,
+    scale_y: float,
+) -> list[tuple[LineString | LinearRing, bool]]:
+    results = []
+    d = _shape_to_d(el)
+    if not d:
+        return results
+
+    transform = inkscape.collect_transform(el)
+
+    path = parse_path(d)
+    for subpath in path.continuous_subpaths():
+        if len(subpath) == 0:
+            continue
+        pts = [subpath[0].start]
+        for seg in subpath:
+            pts.extend(_segment_points(seg))
+        coords = []
+        for p in pts:
+            x_user = p.real * scale_x
+            y_user = p.imag * scale_y
+            v = transform @ [x_user, y_user, 1.0]
+            coords.append((v[0], v[1]))
+        if len(coords) < 2:
+            continue
+        closed = subpath.isclosed()
+        if closed and len(coords) >= 3:
+            coords.append(coords[0])
+            geom = LinearRing(coords)
+        else:
+            geom = LineString(coords)
+        results.append((geom, closed))
+    return results
+```
+
+`OptimizerStep`'s Douglas-Peucker simplification (which already runs on every import via the pipeline) reduces the extra points back down, so this does not bloat the final path count for near-straight curves.
+
+---
+
+### Fix 13 — `prep/io/gcode_writer.py`: laser fires during rapid-traverse moves
+
+`to_gcode()` currently emits, per layer:
+
+```python
+lines.append(f"M3 S{power}")   # laser ON, at cutting power — before any movement
+...
+for path in layer.paths:
+    ...
+    lines.append(f"G0 X{x:.3f} Y{y:.3f}")   # rapid move — laser is already ON from above
+    ...
+    lines.append("M3")
+    ...
+```
+
+`M3 S{power}` turns the laser/spindle on immediately, at full power, before the first `G0` rapid-positioning move. Confirmed via `prep run tests/fixtures/simple_rect.svg`: `M3 S800` appears directly before `G0 X0.000 Y0.000`, so the beam is live while rapidly traversing to the cut start — a burn/scoring hazard and a correctness bug (the same issue exists for every path after the first, since `M5` at path-end turns it off but a fresh `M0` isn't re-guaranteed before the next `G0`... check that too). The laser must be off for every `G0` and only on for `G1` cutting moves.
+
+**Fix:** move the power-setting `M3 S{power}` so it never precedes a rapid move — set power once per layer but keep the laser off (`M5`) until right before cutting starts, and re-assert `M5` before every `G0`:
+
+```python
+def to_gcode(collection: PathCollection) -> str:
+    lines = ["G21", "G90", "M5"]
+
+    for layer in collection.layers:
+        power = int(layer.power * 1000) if layer.power <= 1.0 else int(layer.power)
+
+        for path in layer.paths:
+            coords = list(path.geometry.coords)
+            if not coords:
+                continue
+
+            x, y = coords[0]
+            lines.append(f"G0 X{x:.3f} Y{y:.3f}")
+
+            if path.z is not None:
+                if isinstance(path.z, float):
+                    lines.append(f"G1 Z{path.z:.3f}")
+                elif hasattr(path.z, "__len__"):
+                    lines.append(f"M3 S{power}")
+                    for i, (cx, cy) in enumerate(coords):
+                        if i == 0:
+                            continue
+                        z_val = path.z[i] if i < len(path.z) else path.z[-1]
+                        lines.append(f"G1 X{cx:.3f} Y{cy:.3f} Z{z_val:.3f}")
+                    lines.append("M5")
+                    continue
+
+            lines.append(f"M3 S{power}")
+            for cx, cy in coords[1:]:
+                lines.append(f"G1 X{cx:.3f} Y{cy:.3f}")
+            lines.append("M5")
+
+            if path.z is not None and isinstance(path.z, float):
+                lines.append("G0 Z5")
+
+    lines.append("M5")
+    return "\n".join(lines) + "\n"
+```
+
+The laser is off (`M5`) for every rapid move and only switches on (`M3 S{power}`) immediately before the `G1` cutting moves of each path, then off again after. Drop the redundant empty-layer `M3 S{power}`/`M5` pair — a layer with zero paths should emit nothing.
+
+---
+
+### Fix 14 — `prep/pipeline/steps/optimizer.py`: duplicate-path removal only catches byte-identical WKT
+
+```python
+wkt = simplified.wkt
+if wkt in seen:
+    continue
+seen.add(wkt)
+```
+
+Per the spec, this step must "remove duplicate or fully-overlapping paths." Comparing raw WKT strings only catches paths that are byte-identical, including vertex order and starting point. Two rings tracing the exact same square but starting at a different corner, or wound the other direction before the CCW-normalization above, produce different WKT and are kept as duplicates. Confirmed: constructing two `LinearRing`s over the same square with different starting vertices and running them through `OptimizerStep.process()` keeps both instead of merging to one.
+
+**Fix:** compare geometries with `shapely`'s topological equality instead of string identity:
+
+```python
+def process(self, collection: PathCollection) -> PathCollection:
+    result = deepcopy(collection)
+    for layer in result.layers:
+        simplified_paths: list[CutPath] = []
+        kept_geoms: list = []
+        for path in layer.paths:
+            simplified = shapely.simplify(path.geometry, self.tolerance, preserve_topology=True)
+            if isinstance(simplified, LinearRing) and not simplified.is_ccw:
+                simplified = LinearRing(list(simplified.coords)[::-1])
+            if any(simplified.equals(g) for g in kept_geoms):
+                continue
+            kept_geoms.append(simplified)
+            simplified_paths.append(CutPath(geometry=simplified, closed=path.closed, z=path.z))
+        layer.paths = simplified_paths
+    return result
+```
+
+`Geometry.equals()` is topological (ignores start vertex and direction), which is what "duplicate or fully-overlapping" requires. This is O(n²) per layer; acceptable at the path counts this tool handles (single-digit to low-hundreds per layer).
+
+---
+
+### Fix 15 — `prep/pipeline/steps/layout.py`: missing out-of-bounds check after offset
+
+The spec requires: "raise `ValueError` if any path still falls outside sheet bounds after scaling." `LayoutStep.process()` scales and applies `offset_x`/`offset_y` but never checks the result against `material_width`/`material_height`. A user-supplied offset can push geometry off the sheet with no warning — confirmed by reading the method: there is no bounds check anywhere in it.
+
+**Fix:** after building `new_paths` for all layers, compute the overall bounding box of the transformed geometry and raise if it exceeds the sheet:
+
+```python
+        all_new_coords = [c for layer in result.layers for path in layer.paths for c in path.geometry.coords]
+        if all_new_coords:
+            out_min_x = min(c[0] for c in all_new_coords)
+            out_min_y = min(c[1] for c in all_new_coords)
+            out_max_x = max(c[0] for c in all_new_coords)
+            out_max_y = max(c[1] for c in all_new_coords)
+            if out_min_x < 0 or out_min_y < 0 or out_max_x > collection.material_width or out_max_y > collection.material_height:
+                raise ValueError(
+                    f"Layout offset moves geometry outside the {collection.material_width}x{collection.material_height}mm sheet"
+                )
+
+        return result
+```
+
+Place this after the `for layer in result.layers:` loop that builds `new_paths`, right before the final `return result`.
+
+---
+
+### Fix 16 — `prep/io/importers/svg/reader.py` and `prep/io/importers/prep/reader.py`: eager empty "Default" layer
+
+Both importers do:
+
+```python
+layers_map: dict[str, CutLayer] = {}
+default_layer = CutLayer(color="#000000", label="Default", speed=800.0, power=0.8, force=100)
+layers_map["#000000"] = default_layer
+```
+
+before walking any elements, so every imported document gets a `Default` `CutLayer` with zero paths even when nothing is black — confirmed via the UI (`Layers` panel always lists an empty `Default` entry). The spec's intent ("paths not inside any layer element go into a synthetic default layer") implies this layer should only exist if something actually lands in it.
+
+**Fix:** in both readers, stop pre-registering `"#000000"` in `layers_map`. Let the existing `if color not in layers_map: layers_map[color] = CutLayer(...)` (svg reader) / `target = parent_layer if parent_layer is not None else default_layer` (prep reader) create it lazily — for the prep reader, keep the local `default_layer` object for use as the fallback target, just don't insert it into `layers_map` up front; append it to `layers_map` only the first time a path is actually assigned to it:
+
+```python
+        default_layer = CutLayer(color="#000000", label="Default", speed=800.0, power=0.8, force=100)
+        layers_map: dict[str, CutLayer] = {}
+        ...
+        else:
+            if inkscape.is_visible(el) and tag_local in shape_tags:
+                target = parent_layer if parent_layer is not None else default_layer
+                if target is default_layer and "#000000" not in layers_map:
+                    layers_map["#000000"] = default_layer
+                for geom, closed in _element_to_shapely(el, 1.0, 1.0):
+                    ...
+```
+
+Apply the equivalent lazy-insertion in `SVGImporter.read()`'s `process_element()`.
+
+---
+
 ## Tests
 
 Write unit tests in `tests/` using `pytest`. Include SVG fixture files in `tests/fixtures/`:
