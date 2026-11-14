@@ -2,7 +2,7 @@
 
 ## Role
 
-Claude Code **orchestrates** this project. It plans, reviews, directs, and prepares handoff specs. **openCode implements** (writes the actual code). Do not write implementation code directly — instead produce or update `AGENTS.md` with precise instructions for openCode.
+Claude Code plans, implements, tests, and reviews this project directly.
 
 ## Project Overview
 
@@ -38,7 +38,6 @@ file → ImporterRegistry → PathCollection
 ```
 Prep/
 ├── CLAUDE.md               # This file
-├── AGENTS.md               # openCode implementation spec
 ├── pyproject.toml
 ├── prep/
 │   ├── cli.py               # headless runner: prep run / prep send / prep ui
